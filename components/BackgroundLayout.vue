@@ -1,5 +1,5 @@
 <template>
-  <div ref="canvas" class="w-full h-full absolute top-0 left-0"></div>
+  <div ref="canvas" class="flex w-[210mm] h-[297mm] absolute top-0 left-0"></div>
 </template>
 
 <script>
@@ -22,20 +22,23 @@ export default {
       };
 
       p.setup = () => {
-        p.createCanvas(p.windowWidth, p.windowHeight, p.WEBGL);
+        const container = this.$refs.canvas;
+        p.createCanvas(container.clientWidth, container.clientHeight, p.WEBGL);
         p.noStroke();
 
         // ボールデータ生成
-        for (let i = 0; i < 15; i++) {
+        for (let i = 0; i < 40; i++) {
           balls.push({
             x: p.random(p.width),
             y: p.random(p.height),
-            r: p.random(200, 350),
-            h: p.random(0.0, 1.0), // 色相
-            s: p.random(0.7, 0.9), // 彩度
-            l: p.random(0.88, 0.92), // 明度
-            vx: randomSpeed(-2, -0.5, 0.5, 2),
-            vy: randomSpeed(-2, -0.5, 0.5, 2),
+            r: p.random(120, 180),
+            h: p.random(0.4, 0.75), // 色相
+            s: p.random(0.84, 0.92), // 彩度
+            l: p.random(0.91, 0.96), // 明度
+            vx: randomSpeed(-1, -0.2, 0.2, 1),
+            vy: randomSpeed(-0.8, -0.2, 0.2, 0.8),
+            // vx: 0.0,
+            // vy: 0.0
           });
         }
       };
@@ -43,6 +46,7 @@ export default {
       p.draw = () => {
         p.shader(shaderProgram);
         shaderProgram.setUniform("u_resolution", [p.width, p.height]);
+        shaderProgram.setUniform("u_aspect", p.width / p.height);
         shaderProgram.setUniform("u_threshold", 0.6);
         shaderProgram.setUniform("u_blurWidth", 0.4);
         shaderProgram.setUniform("u_time", p.millis() / 1000);
@@ -54,8 +58,8 @@ export default {
           ball.x += ball.vx;
           ball.y += ball.vy;
 
-          if (ball.x < 0 || ball.x > p.width) ball.vx *= -1;
-          if (ball.y < 0 || ball.y > p.height) ball.vy *= -1;
+          if (ball.x < 10 || ball.x > p.width - 10) ball.vx *= -1;
+          if (ball.y < 10 || ball.y > p.height - 10) ball.vy *= -1;
 
           positions.push(ball.x, ball.y, ball.r);
           colors.push(ball.h, ball.s, ball.l);
@@ -65,11 +69,7 @@ export default {
         shaderProgram.setUniform("u_colors", colors);
 
         // rectをキャンバス全体に合わせて描画
-        p.rect(-p.width / 2, -p.height / 2, p.width, p.height);
-      };
-
-      p.windowResized = () => {
-        p.resizeCanvas(p.windowWidth, p.windowHeight);
+        p.rect();
       };
     };
     

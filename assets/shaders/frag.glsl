@@ -3,8 +3,9 @@ precision mediump float;
 #endif
 
 uniform vec2 u_resolution;   // 画面サイズ
-uniform vec3 u_balls[15];    // ボールの位置と半径（x, y, r）
-uniform vec3 u_colors[15];   // ボールの色（HSL）
+uniform float u_aspect;      // アスペクト比
+uniform vec3 u_balls[40];    // ボールの位置と半径（x, y, r）
+uniform vec3 u_colors[40];   // ボールの色（HSL）
 uniform float u_threshold;   // しきい値
 uniform float u_blurWidth;   // ぼかしの幅
 
@@ -27,12 +28,13 @@ vec3 hsl2rgb(float h, float s, float l) {
 
 void main() {
     vec2 uv = vTexCoord;
+    uv.x *= u_aspect;
     float sum = 0.0;     // 影響度の合計
     vec2 hueVec = vec2(0.0); // Hueをベクトルとして合成
     float sTotal = 0.0;  // 彩度の加重合計
     float lTotal = 0.0;  // 明度の加重合計
 
-    for (int i = 0; i < 15; i++) {
+    for (int i = 0; i < 40; i++) {
         vec2 center = u_balls[i].xy / u_resolution;
         float radius = u_balls[i].z / u_resolution.x;
         float dist = distance(uv, center);

@@ -7,14 +7,7 @@ export default {
     "./plugins/**/*.{js,ts}",
     "./nuxt.config.{js,ts}",
   ],
-  theme: {
-    extend: {
-      spacing: {
-        'card-w': '91mm',
-        'card-h': '55mm',
-      },
-    },
-  },
+  theme: {},
   plugins: [],
 }
 
