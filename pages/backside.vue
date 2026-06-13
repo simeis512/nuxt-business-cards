@@ -1,16 +1,14 @@
 <template>
   <div class="print-page">
-    <BackgroundLayout />
-    <CardGrid />
+    <CardGridBackside />
   </div>
 </template>
 
 <script>
-import BackgroundLayout from "@/components/BackgroundLayout.vue";
-import CardGrid from "@/components/CardGrid.vue";
+import CardGridBackside from "@/components/backside/CardGridBackside.vue";
 
 export default {
-  components: { BackgroundLayout, CardGrid },
+  components: { CardGridBackside },
 };
 </script>
 

@@ -51,6 +51,29 @@ export default {
         shaderProgram.setUniform("u_blurWidth", 0.4);
         shaderProgram.setUniform("u_time", p.millis() / 1000);
 
+        // 斥力計算
+        const repulsionStrength = 0.05;
+        const repulsionRange = 100;
+
+        balls.forEach((ballA, i) => {
+          balls.forEach((ballB, j) => {
+            if (i === j) return;
+            const dx = ballA.x - ballB.x;
+            const dy = ballA.y - ballB.y;
+            const distSq = dx * dx + dy * dy;
+
+            if (distSq < repulsionRange * repulsionRange && distSq > 0.0001) {
+              const dist = Math.sqrt(distSq);
+              const force = repulsionStrength / distSq;
+              const fx = (dx / dist) * force;
+              const fy = (dy / dist) * force;
+
+              ballA.vx += fx;
+              ballA.vy += fy;
+            }
+          });
+        });
+
         // ボールデータ更新
         let positions = [];
         let colors = [];

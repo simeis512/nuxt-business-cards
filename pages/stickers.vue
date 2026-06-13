@@ -1,16 +1,14 @@
 <template>
   <div class="print-page">
-    <BackgroundLayout />
-    <CardGrid />
+    <CardGridStickers />
   </div>
 </template>
 
 <script>
-import BackgroundLayout from "@/components/BackgroundLayout.vue";
-import CardGrid from "@/components/CardGrid.vue";
+import CardGridStickers from "@/components/stickers/CardGridStickers.vue";
 
 export default {
-  components: { BackgroundLayout, CardGrid },
+  components: { CardGridStickers },
 };
 </script>
 
