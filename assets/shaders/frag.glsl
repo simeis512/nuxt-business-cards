@@ -1,5 +1,5 @@
 #ifdef GL_ES
-precision mediump float;
+precision highp float;
 #endif
 
 #define MAX_BALLS 128
@@ -12,6 +12,13 @@ uniform float u_threshold;          // しきい値
 uniform float u_blurWidth;          // 輪郭のぼかし幅
 
 varying vec2 vTexCoord;
+
+// 0〜1の擬似乱数ハッシュ（座標から決定的に生成）
+float hash12(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
 
 // HSLからRGBに変換
 vec3 hsl2rgb(float h, float s, float l) {
@@ -68,6 +75,14 @@ void main() {
         float avgLightness = lTotal / sum;
 
         vec3 color = hsl2rgb(avgHue, avgSaturation, avgLightness);
+
+        // 8bit量子化によるバンディング軽減用ディザ（三角分布ノイズ ±1LSB）。
+        // 2つの一様乱数の和で三角分布にすると平坦部のノイズ感を抑えつつ段差を散らせる。
+        float r1 = hash12(fragPx);
+        float r2 = hash12(fragPx + 19.19);
+        float dither = (r1 + r2 - 1.0) / 255.0;
+        color += dither;
+
         gl_FragColor = vec4(color, alpha);
     } else {
         gl_FragColor = vec4(1.0, 1.0, 1.0, 0.0); // 背景（透明）

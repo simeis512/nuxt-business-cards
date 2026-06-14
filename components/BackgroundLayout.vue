@@ -1,5 +1,25 @@
 <template>
-  <div ref="canvas" class="flex w-[210mm] h-[297mm] absolute top-0 left-0"></div>
+  <div>
+    <div ref="canvas" class="flex w-[210mm] h-[297mm] absolute top-0 left-0"></div>
+
+    <!-- 描画中のオーバーレイ。renderAll はメインスレッドを同期ブロックするので、
+         先にこれを1フレーム描画させてから重い処理に入る（runBuild 参照）。
+         スピナーは transform アニメ＝コンポジタ側で回るので描画中も止まらない。 -->
+    <div
+      v-if="rendering"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-white/50 pointer-events-none print:hidden"
+    >
+      <div class="flex items-center gap-3 rounded-xl bg-black/75 px-5 py-3 text-white text-sm shadow-lg">
+        <span class="inline-block w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin"></span>
+        描画中…
+      </div>
+    </div>
+
+    <!-- 操作ヒント（印刷には出さない） -->
+    <div class="fixed bottom-3 right-3 z-40 rounded-md bg-black/55 px-2.5 py-1 text-[11px] text-white/90 pointer-events-none print:hidden">
+      R キーで再描画
+    </div>
+  </div>
 </template>
 
 <script>
@@ -53,6 +73,13 @@ const smoothstep = (a, b, x) => {
 };
 
 export default {
+  data() {
+    return { rendering: false };
+  },
+  beforeUnmount() {
+    if (this._onKey) window.removeEventListener("keydown", this._onKey);
+    if (this._p5) this._p5.remove();
+  },
   mounted() {
     // ?debug / ?debug=1 → 矩形・占有率オーバーレイ、?debug=2 → 背景にグリッド（屈折の確認用）
     const DEBUG = (() => {
@@ -473,19 +500,34 @@ export default {
         const textN = document.querySelectorAll('[data-plate-role="text"]').length;
         const qrN = document.querySelectorAll("#qr svg").length; // QR本体が描画済みか
         if (cardN > 0 && textN === cardN && qrN === cardN) {
-          build();
+          runBuild();
         } else if (tries < 180) {
           requestAnimationFrame(() => waitForPlates(tries + 1));
         } else if (textN > 0) {
-          build();
+          runBuild();
         }
       };
 
-      const build = () => {
-        acquireRects();
-        placeBalls();
-        renderAll();
+      // 「描画中…」を確実に1フレーム表示してから、同期ブロックする重い描画を走らせる。
+      // nextTick でDOM反映 → 二重rAFでブラウザに実描画を1回させる → 構築。
+      const runBuild = async () => {
+        if (this.rendering) return; // 多重実行を防ぐ
+        this.rendering = true;
+        await this.$nextTick();
+        await new Promise((res) =>
+          requestAnimationFrame(() => requestAnimationFrame(res))
+        );
+        try {
+          acquireRects();
+          placeBalls();
+          renderAll();
+        } finally {
+          this.rendering = false;
+        }
       };
+
+      // Rキーからの再描画用に公開（新しい乱数シードで配置し直す）
+      this._rebuild = runBuild;
 
       p.setup = () => {
         p.pixelDensity(1);
@@ -511,7 +553,17 @@ export default {
       };
     };
 
-    new p5(sketch, this.$refs.canvas);
+    this._p5 = new p5(sketch, this.$refs.canvas);
+
+    // R キーで再描画（入力欄にフォーカス中などは無視）
+    this._onKey = (e) => {
+      if (e.key !== "r" && e.key !== "R") return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      this._rebuild && this._rebuild();
+    };
+    window.addEventListener("keydown", this._onKey);
   },
 };
 </script>
