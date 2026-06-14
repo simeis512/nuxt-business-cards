@@ -20,13 +20,13 @@
         />
       </svg>
       <div class="absolute inset-0 flex flex-col justify-center items-center opacity-70">
-        <div class="absolute top-[1.2mm] -left-[4.5mm] zen-maru-gothic-medium text-[#013B] text-[0.8em] -tracking-[.1em] leading-[0.9em] scale-[.65]">
+        <div class="absolute top-[1.2mm] -left-[4.5mm] zen-maru-gothic-medium text-[#0139] text-[0.8em] -tracking-[.04em] leading-[0.9em] scale-[.65]">
           <div v-for="(l, index) in JSON.parse(job)" :key="l" :style="{ 'margin-left': `${index * 8}em` }">
             {{ l }}
           </div>
         </div>
-        <div class="absolute top-[6.2mm] left-[16.7mm] zen-maru-gothic-bold text-[#013E] text-[2em] -tracking-[.1em]">{{ name }}</div>
-        <div class="absolute top-[18.5mm] left-[38mm] zen-maru-gothic-medium text-[#013B] text-[0.7em] -tracking-[.1em]">{{ account }}</div>
+        <div class="absolute top-[6.2mm] left-[16.5mm] zen-maru-gothic-bold text-[#0136] text-[2em] -tracking-[.02em] [-webkit-text-stroke:0.6px_#013A] [text-shadow:1px_1px_1px_#0133]">{{ name }}</div>
+        <div class="absolute top-[18.5mm] left-[36.5mm] zen-maru-gothic-medium text-[#0139] text-[0.7em] -tracking-[.04em]">{{ account }}</div>
       </div>
     </div>
     <div
@@ -52,7 +52,7 @@
             class="origin-center scale-[.96]"
           />
         </clipPath>
-        <image x="4" y="2" width="198" height="88" clip-path="url(#clip-shape)" :xlink:href="`data:image/png;base64,${img}`" />
+        <image x="4" y="2" width="198" height="88" opacity="0.85" clip-path="url(#clip-shape)" :xlink:href="`data:image/png;base64,${img}`" />
       </svg>
       <div class="absolute top-[18.7mm] left-[2.2mm] zen-maru-gothic-bold text-[#FFFF] text-[0.7em] -tracking-[.1em] scale-95" style="-webkit-text-stroke: 0.5px #013A;">{{ alt }}</div>
     </div>
