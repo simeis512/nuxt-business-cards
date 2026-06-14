@@ -30,16 +30,16 @@ import fragShader from "@/assets/shaders/frag.glsl?raw";
 // ---- メタボールの調整パラメータ -------------------------------------------
 const THRESHOLD = 0.6;      // しきい値
 const BLUR_WIDTH = 0.08;    // 輪郭のソフトさ（小さいほどエッジが立つ）
-const FROST_BLUR_PX = 0.5;    // すりガラスのぼかし量(px)。0なら完全に透明な板
-const FROST_WHITE = 0.25;   // すりガラスの白み（テキスト/イラスト面）
+const FROST_BLUR_PX = 0.5;  // すりガラスのぼかし量(px)。0なら完全に透明な板
+const FROST_WHITE = 0.35;   // すりガラスの白み（テキスト/イラスト面）
 const QR_FROST_WHITE = 0.0; // QR面は自前の白背景があるので、フロスト側の白は無し
 const QR_RADIUS = 18;       // QR背景の角丸（150px基準。QRCodeGeneratorStyling の rx と一致）
 
 // 凸レンズ風の屈折：プレート形状をぼかしたマスクで「縁の帯」を求め、
 // その帯だけ背景を中心方向に拡大サンプリングする。中央は素通し（透明な板）、
 // 丸い縁だけが凸レンズのように背景を拡大・湾曲させる。
-const LENS_EDGE = 3;      // 縁のレンズ帯の幅(px)。大きいほどなだらかで広いレンズ
-const LENS_MAG = 0.1;     // 縁での拡大の強さ（中心方向へ引き込む割合）
+const LENS_EDGE = 3;       // 縁のレンズ帯の幅(px)。大きいほどなだらかで広いレンズ
+const LENS_MAG = 0.1;      // 縁での拡大の強さ（中心方向へ引き込む割合）
 const DISP_MARGIN = 40;    // レンズで外側からサンプルするぶんの余白(px)
 
 // ハイライト：縁から LENS_EDGE 内側のライン上に、11時方向の光で発光する細い線。
@@ -54,7 +54,7 @@ const DROP_DX = 1;         // 影のオフセットx(px)
 const DROP_DY = 1;         // 影のオフセットy(px)
 const DROP_BLUR = 2;       // 影のぼかし(px)
 
-const R_MIN = 100;          // ボール半径(px)
+const R_MIN = 100;         // ボール半径(px)
 const R_MAX = 125;
 const MAX_BALLS = 128;     // シェーダー側の上限と一致させる
 const ANCHOR_JIT = 8;      // 固定アンカーのばらけ幅(px)
@@ -227,9 +227,34 @@ export default {
         });
       };
 
+      // 各カードに必ず入れる色相帯：緑・水色・紫。
+      const HUE_BANDS = [
+        [0.36, 0.44], // 緑
+        [0.49, 0.56], // 水色
+        [0.72, 0.78], // 紫
+      ];
+      const pickHue = (band) => rand(band[0], band[1]);
+      const shuffleInPlace = (arr) => {
+        for (let k = arr.length - 1; k > 0; k--) {
+          const j = Math.floor(Math.random() * (k + 1));
+          [arr[k], arr[j]] = [arr[j], arr[k]];
+        }
+        return arr;
+      };
+      // 緑・水色・紫を必ず1つずつ含め、残りはランダムな帯から補い、順番をシャッフルする。
+      // これで「3色は必ず入る」かつ「位置（順番）はカードごとに変わる」を両立する。
+      const buildCardHues = (n) => {
+        const hues = HUE_BANDS.map(pickHue);
+        while (hues.length < n) {
+          hues.push(pickHue(HUE_BANDS[Math.floor(Math.random() * HUE_BANDS.length)]));
+        }
+        return shuffleInPlace(hues);
+      };
+
       // --- 固定アンカーによるメタボール配置 ----------------------------------
-      // 各カードに5つの定位置（少しばらけさせる）。各アンカーは
-      // 「主ボール（QR左上と同サイズ）＋周囲に小ボール1つ」で構成する。
+      // 各カードに6つの定位置（少しばらけさせる）。各アンカーは
+      // 「主ボール＋周囲に小ボール1つ」で構成する。色相はカードごとに
+      // 緑・水色・紫を必ず含み、順番はシャッフルしてカード差を出す。
       const placeBalls = () => {
         balls = [];
         const jit = () => rand(-sJit, sJit);
@@ -242,24 +267,27 @@ export default {
 
           const anchors = [
             { x: q.x + q.w * 0.28, y: q.y + q.h * 0.28 },     // QR 左上
-            { x: q.x + q.w * 0.70, y: q.y + q.h * 0.30 },     // QR 右やや上
-            { x: q.x + q.w * 0.40, y: q.y + q.h * 0.60 },     // QR 右下
-            { x: tp.x + tp.w * 0.45, y: tp.y + tp.h * 0.60 }, // 名前 中央やや左下
-            { x: ip.x + ip.w * 0.30, y: ip.y + ip.h * 0.75 }, // イラスト やや下
+            { x: q.x + q.w * 0.72, y: q.y + q.h * 0.26 },     // QR 右上
+            { x: q.x + q.w * 0.42, y: q.y + q.h * 0.62 },     // QR 左下
+            { x: tp.x + tp.w * 0.47, y: tp.y + tp.h * 0.60 }, // 名前 中央やや左下
+            { x: ip.x + ip.w * 0.35, y: ip.y + ip.h * 0.75 }, // イラスト やや下
             { x: ip.x + ip.w * 0.75, y: ip.y + ip.h * 0.25 }, // イラスト 右上
           ];
 
-          anchors.forEach((an) => {
+          // このカードの色相（緑・水色・紫を必ず含み、順番はシャッフル済み）
+          const hues = buildCardHues(anchors.length);
+
+          anchors.forEach((an, ai) => {
             const mainR = rand(sRMin, sRMax);
             const mx = an.x + jit();
             const my = an.y + jit();
-            const h = rand(0.4, 0.75);
+            const h = hues[ai];
             let sl = slFromHue(h);
             balls.push({ x: mx, y: my, r: mainR, h, s: sl.s, l: sl.l });
             // 周囲に小さいメタボールを1つ（主ボールと同系色・重なる近さ・少しばらけ）
             const ang = rand(0, Math.PI * 2);
             const d = mainR * rand(0.25, 0.3);
-            const sh = Math.min(0.75, Math.max(0.4, h + rand(-0.03, 0.03)));
+            const sh = Math.min(0.82, Math.max(0.34, h + rand(-0.02, 0.02)));
             sl = slFromHue(sh);
             balls.push({
               x: mx + Math.cos(ang) * d,
@@ -275,13 +303,14 @@ export default {
         balls = balls.slice(0, MAX_BALLS);
       };
 
-      // 色相hに応じてs/lを決める。緑(h≒0.4)は濃いめ、青紫(h≒0.75)は
-      // 濃くなりすぎないよう明るく・彩度控えめにする。
+      // 色相hに応じてs/lを決める。基本は修正前の色味（緑は濃いめ、紫は彩度
+      // 控えめでやわらかい）。ただし紫が白飛びしないよう、明度の振れ幅だけ
+      // 狭める（旧:+0.1*ht=最大l0.96 → +0.06*ht=最大l約0.92）。
       const slFromHue = (h) => {
         const ht = Math.min(1, Math.max(0, (h - 0.4) / 0.35)); // 0:緑 1:紫
         return {
-          s: 0.94 - 0.18 * ht + rand(-0.02, 0.02), // 緑は濃く、青紫は控えめ
-          l: 0.86 + 0.1 * ht + rand(-0.02, 0.02),  // 緑はやや暗く、青紫は明るく
+          s: 0.94 - 0.18 * ht + rand(-0.02, 0.02), // 緑は濃く、青紫は控えめ（修正前どおり）
+          l: 0.86 + 0.06 * ht + rand(-0.02, 0.02), // 紫の明るさ上限を抑えて白飛び回避
         };
       };
 

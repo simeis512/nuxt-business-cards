@@ -25,7 +25,7 @@
             {{ l }}
           </div>
         </div>
-        <div class="absolute top-[6.2mm] left-[16.5mm] zen-maru-gothic-bold text-[#0136] text-[2em] -tracking-[.02em] [-webkit-text-stroke:0.6px_#013A] [text-shadow:1px_1px_1px_#0133]">{{ name }}</div>
+        <div class="absolute top-[6.2mm] left-[16.5mm] zen-maru-gothic-bold text-[#0138] text-[2em] -tracking-[.02em] [-webkit-text-stroke:0.6px_#013A] [text-shadow:1px_1px_1px_#0137]">{{ name }}</div>
         <div class="absolute top-[18.5mm] left-[36.5mm] zen-maru-gothic-medium text-[#0139] text-[0.7em] -tracking-[.04em]">{{ account }}</div>
       </div>
     </div>

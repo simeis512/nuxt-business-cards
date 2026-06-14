@@ -1,5 +1,5 @@
 <template>
-  <div class="absolute top-0 left-0 w-[210mm] h-[297mm] px-[12mm] py-[7mm] grid grid-cols-2 gap-x-[4mm] gap-y-[2mm]">
+  <div class="absolute top-0 left-0 w-[210mm] h-[297mm] pl-[13mm] pr-[11mm] py-[7mm] grid grid-cols-2 gap-x-[4mm] gap-y-[2mm]">
     <BusinessCard
       v-for="(card, index) in cards"
       :key="index"
