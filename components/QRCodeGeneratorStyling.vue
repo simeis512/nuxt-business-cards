@@ -39,7 +39,7 @@ export default {
       data: this.data,
       dotsOptions: { color: '#013', type: 'dots' },
       cornersSquareOptions: { color: '#013', type: 'extra-rounded' },
-      backgroundOptions: { color: '#FFF8' },
+      backgroundOptions: { color: '#FFF4' },
       qrOptions: { errorCorrectionLevel: 'H' },
     });
     qrCode.append(this.$refs.qrCode);

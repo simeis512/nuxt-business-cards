@@ -2,12 +2,14 @@
 precision mediump float;
 #endif
 
-uniform vec2 u_resolution;   // 画面サイズ
-uniform float u_aspect;      // アスペクト比
-uniform vec3 u_balls[40];    // ボールの位置と半径（x, y, r）
-uniform vec3 u_colors[40];   // ボールの色（HSL）
-uniform float u_threshold;   // しきい値
-uniform float u_blurWidth;   // ぼかしの幅
+#define MAX_BALLS 128
+
+uniform vec2 u_resolution;          // 画面サイズ(px)
+uniform int u_count;                // 有効なボール数
+uniform vec3 u_balls[MAX_BALLS];    // ボールの位置と半径（x, y, r）すべてpx
+uniform vec3 u_colors[MAX_BALLS];   // ボールの色（HSL）
+uniform float u_threshold;          // しきい値
+uniform float u_blurWidth;          // 輪郭のぼかし幅
 
 varying vec2 vTexCoord;
 
@@ -27,17 +29,20 @@ vec3 hsl2rgb(float h, float s, float l) {
 }
 
 void main() {
-    vec2 uv = vTexCoord;
-    uv.x *= u_aspect;
-    float sum = 0.0;     // 影響度の合計
-    vec2 hueVec = vec2(0.0); // Hueをベクトルとして合成
-    float sTotal = 0.0;  // 彩度の加重合計
-    float lTotal = 0.0;  // 明度の加重合計
+    // ピクセル座標（左上原点。DOM座標とy向きを一致させる）
+    vec2 fragPx = vTexCoord * u_resolution;
 
-    for (int i = 0; i < 40; i++) {
-        vec2 center = u_balls[i].xy / u_resolution;
-        float radius = u_balls[i].z / u_resolution.x;
-        float dist = distance(uv, center);
+    float sum = 0.0;         // 影響度の合計
+    vec2 hueVec = vec2(0.0); // Hueをベクトルとして合成
+    float sTotal = 0.0;      // 彩度の加重合計
+    float lTotal = 0.0;      // 明度の加重合計
+
+    for (int i = 0; i < MAX_BALLS; i++) {
+        if (i >= u_count) break;
+
+        vec2 center = u_balls[i].xy;
+        float radius = u_balls[i].z;
+        float dist = distance(fragPx, center);
 
         // 影響度の計算（smoothstepで滑らかに減衰）
         float influence = smoothstep(0.0, 1.0, 1.0 - (dist / radius));
@@ -56,7 +61,6 @@ void main() {
     float alpha = smoothstep(u_threshold - u_blurWidth, u_threshold + u_blurWidth, sum);
 
     if (alpha > 0.01) {
-        // Hueの平均を計算
         float avgHue = atan(hueVec.y, hueVec.x) / (2.0 * 3.14159265);
         if (avgHue < 0.0) avgHue += 1.0;
 
@@ -64,7 +68,7 @@ void main() {
         float avgLightness = lTotal / sum;
 
         vec3 color = hsl2rgb(avgHue, avgSaturation, avgLightness);
-        gl_FragColor = vec4(color, alpha); // アルファでぼかしを適用
+        gl_FragColor = vec4(color, alpha);
     } else {
         gl_FragColor = vec4(1.0, 1.0, 1.0, 0.0); // 背景（透明）
     }

@@ -1,14 +1,21 @@
 <template>
-  <div class="w-[91mm] h-[55mm] p-2 relative bg-[#FFF0] overflow-hidden">
+  <div data-card class="w-[91mm] h-[55mm] p-2 relative bg-[#FFF0] overflow-hidden">
     <div class="absolute inset-0 flex justify-center items-center -left-[36mm]">
       <QRCodeGeneratorStyling v-if="qrData" :data="qrData" class="rotate-45" />
     </div>
-    <div class="absolute top-[3mm] left-[35mm]">
+    <!-- data-glass-plate: 背景canvas側がこの矩形と形状(path/viewBox)を実測して、内側にだけ背景をぼかして焼き込む -->
+    <div
+      data-glass-plate
+      data-plate-role="text"
+      data-plate-path="M 12 4 A 20 8 20 0 0 4 12 L 72 80 A 24 24 90 0 0 88 88 H 192 A 20 8 20 0 0 200 80 L 132 12 A 24 24 90 0 0 116 4 Z"
+      data-plate-vb="205 90"
+      class="absolute top-[3mm] left-[35mm]"
+    >
       <svg width="205" height="90" viewBox="0 0 205 90" xmlns="http://www.w3.org/2000/svg">
         <path
           d="M 12 4 A 20 8 20 0 0 4 12 L 72 80 A 24 24 90 0 0 88 88 H 192 A 20 8 20 0 0 200 80 L 132 12 A 24 24 90 0 0 116 4 Z"
-          fill="#FFF3"
-          stroke="#013A"
+          fill="#FFF0"
+          stroke="#0135"
           stroke-width="0.2"
         />
       </svg>
@@ -22,19 +29,25 @@
         <div class="absolute top-[18.5mm] left-[38mm] zen-maru-gothic-medium text-[#013B] text-[0.7em] -tracking-[.1em]">{{ account }}</div>
       </div>
     </div>
-    <div class="absolute top-[27.7mm] left-[35mm]">
+    <div
+      data-glass-plate
+      data-plate-role="image"
+      data-plate-path="M 12 88 A 20 8 -20 0 1 4 80 L 72 12 A 24 24 90 0 1 88 4 H 192 A 20 8 -20 0 1 200 12 L 132 80 A 24 24 90 0 1 116 88 Z"
+      data-plate-vb="205 90"
+      class="absolute top-[27.7mm] left-[35mm]"
+    >
       <svg width="205" height="90" viewBox="0 0 205 90" xmlns="http://www.w3.org/2000/svg">
         <path
           d="M 12 88 A 20 8 -20 0 1 4 80 L 72 12 A 24 24 90 0 1 88 4 H 192 A 20 8 -20 0 1 200 12 L 132 80 A 24 24 90 0 1 116 88 Z"
-          fill="#FFF5"
-          stroke="#013A"
+          fill="#FFF0"
+          stroke="#0135"
           stroke-width="0.2"
         />
         <clipPath id="clip-shape">
           <path
             d="M 12 88 A 20 7 -18 0 1 4 80 L 72 12 A 24 24 90 0 1 88 4 H 192 A 20 7 -18 0 1 200 12 L 132 80 A 24 24 90 0 1 116 88 Z"
             fill="#FFF5"
-            stroke="#013A"
+            stroke="#0135"
             stroke-width="0.2"
             class="origin-center scale-[.96]"
           />

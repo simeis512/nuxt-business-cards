@@ -7,95 +7,510 @@ import p5 from "p5";
 import vertShader from "@/assets/shaders/vert.glsl?raw";
 import fragShader from "@/assets/shaders/frag.glsl?raw";
 
+// ---- メタボールの調整パラメータ -------------------------------------------
+const THRESHOLD = 0.6;      // しきい値
+const BLUR_WIDTH = 0.08;    // 輪郭のソフトさ（小さいほどエッジが立つ）
+const FROST_BLUR_PX = 0.5;    // すりガラスのぼかし量(px)。0なら完全に透明な板
+const FROST_WHITE = 0.25;   // すりガラスの白み（テキスト/イラスト面）
+const QR_FROST_WHITE = 0.0; // QR面は自前の白背景があるので、フロスト側の白は無し
+const QR_RADIUS = 18;       // QR背景の角丸（150px基準。QRCodeGeneratorStyling の rx と一致）
+
+// 凸レンズ風の屈折：プレート形状をぼかしたマスクで「縁の帯」を求め、
+// その帯だけ背景を中心方向に拡大サンプリングする。中央は素通し（透明な板）、
+// 丸い縁だけが凸レンズのように背景を拡大・湾曲させる。
+const LENS_EDGE = 3;      // 縁のレンズ帯の幅(px)。大きいほどなだらかで広いレンズ
+const LENS_MAG = 0.1;     // 縁での拡大の強さ（中心方向へ引き込む割合）
+const DISP_MARGIN = 40;    // レンズで外側からサンプルするぶんの余白(px)
+
+// ハイライト：縁から LENS_EDGE 内側のライン上に、11時方向の光で発光する細い線。
+// 白背景では見えず、メタボールが裏に来たときに光って見える。
+const HILIGHT_A = 0.9;     // ハイライトの強さ(0〜1)
+const HILIGHT_T = 0.4;     // ラインが乗るマスク値（縁からLENS_EDGE内側≒0.8）
+const HILIGHT_BAND = 0.22; // ラインの太さ（マスク値の許容幅）
+
+// ドロップシャドウ：板の存在感をかすかに高める薄い影
+const DROP_A = 0.04;       // 影の濃さ(0〜1)
+const DROP_DX = 1;         // 影のオフセットx(px)
+const DROP_DY = 1;         // 影のオフセットy(px)
+const DROP_BLUR = 2;       // 影のぼかし(px)
+
+const R_MIN = 100;          // ボール半径(px)
+const R_MAX = 125;
+const MAX_BALLS = 128;     // シェーダー側の上限と一致させる
+const ANCHOR_JIT = 8;      // 固定アンカーのばらけ幅(px)
+
+// 印刷用の内部解像度倍率。表示サイズ(mm)は据え置き、canvasのピクセル数だけ増やす。
+// 大きいほど高精細だが、初期化が重くなる（2〜3が目安）。
+const SCALE = 3;
+
+// 占有率の目標レンジ（カード面積に対するメタボールの割合）
+const OCC_MIN = 0.22;
+const OCC_MAX = 0.38;
+
+const smoothstep = (a, b, x) => {
+  const t = Math.min(Math.max((x - a) / (b - a), 0), 1);
+  return t * t * (3 - 2 * t);
+};
+
 export default {
   mounted() {
+    // ?debug / ?debug=1 → 矩形・占有率オーバーレイ、?debug=2 → 背景にグリッド（屈折の確認用）
+    const DEBUG = (() => {
+      if (typeof window === "undefined") return 0;
+      const m = window.location.search.match(/[?&]debug(?:=(\d+))?/);
+      if (!m) return 0;
+      return m[1] ? parseInt(m[1], 10) : 1;
+    })();
+
     const sketch = (p) => {
       let shaderProgram;
+      let webglGfx; // シェーダー描画用（WEBGL）
+      let bg;       // メタボールの合成（シャープ／P2D）
+      let bgData;   // bg のピクセル（屈折のサンプリング元）
+
+      let W = 0;
+      let H = 0;
       let balls = [];
+      let plates = [];        // 各カードのテキストプレート矩形（canvas座標, px）
+      let imagePlates = [];   // 各カードのイラストプレート矩形
+      let cards = [];         // カード矩形（canvas座標, px）
+      let qrRects = [];       // 各カードのQRのAABB
+      let frostRegions = [];  // ぼかしを焼き込む全領域（テキスト/イラスト/QR）
 
-      function randomSpeed(min1, max1, min2, max2) {
-        return Math.random() < 0.5 ? p.random(min1, max1) : p.random(min2, max2);
-      }
+      const rand = (a, b) => a + Math.random() * (b - a);
 
-      p.preload = () => {
-        shaderProgram = p.createShader(vertShader, fragShader);
+      // SCALEを反映したピクセル系の値（座標を高解像度化したぶん、サイズ系も倍にする）
+      const sRMin = R_MIN * SCALE;
+      const sRMax = R_MAX * SCALE;
+      const sJit = ANCHOR_JIT * SCALE;
+      const sLensEdge = LENS_EDGE * SCALE;
+      const sDispMargin = DISP_MARGIN * SCALE;
+      const sFrostBlur = FROST_BLUR_PX * SCALE;
+      const sDropDx = DROP_DX * SCALE;
+      const sDropDy = DROP_DY * SCALE;
+      const sDropBlur = DROP_BLUR * SCALE;
+
+      // 原点中心の角丸正方形パス（QRの丸角に合わせる）
+      const roundedRectPath = (side, r) => {
+        const h = side / 2;
+        const path = new Path2D();
+        path.moveTo(-h + r, -h);
+        path.lineTo(h - r, -h);
+        path.arcTo(h, -h, h, -h + r, r);
+        path.lineTo(h, h - r);
+        path.arcTo(h, h, h - r, h, r);
+        path.lineTo(-h + r, h);
+        path.arcTo(-h, h, -h, h - r, r);
+        path.lineTo(-h, -h + r);
+        path.arcTo(-h, -h, -h + r, -h, r);
+        path.closePath();
+        return path;
       };
 
-      p.setup = () => {
-        const container = this.$refs.canvas;
-        p.createCanvas(container.clientWidth, container.clientHeight, p.WEBGL);
-        p.noStroke();
+      const clipToCard = (ctx, card) => {
+        if (!card) return;
+        ctx.beginPath();
+        ctx.rect(card.x, card.y, card.w, card.h);
+        ctx.clip();
+      };
 
-        // ボールデータ生成
-        for (let i = 0; i < 40; i++) {
-          balls.push({
-            x: p.random(p.width),
-            y: p.random(p.height),
-            r: p.random(120, 180),
-            h: p.random(0.4, 0.75), // 色相
-            s: p.random(0.84, 0.92), // 彩度
-            l: p.random(0.91, 0.96), // 明度
-            vx: randomSpeed(-1, -0.2, 0.2, 1),
-            vy: randomSpeed(-0.8, -0.2, 0.2, 0.8),
-            // vx: 0.0,
-            // vy: 0.0
+      // --- JS側のフィールド評価（シェーダーと同じロジックを粗く再現）---------
+      const fieldSum = (px, py) => {
+        let sum = 0;
+        for (const b of balls) {
+          const dist = Math.hypot(px - b.x, py - b.y);
+          let inf = smoothstep(0, 1, 1 - dist / b.r);
+          inf = inf * inf;
+          sum += inf;
+        }
+        return sum;
+      };
+      const isMeta = (px, py) =>
+        smoothstep(THRESHOLD - BLUR_WIDTH, THRESHOLD + BLUR_WIDTH, fieldSum(px, py)) > 0.5;
+
+      // --- DOMからプレート／カードの位置を実測 --------------------------------
+      const acquireRects = () => {
+        const canvasRect = p.canvas.getBoundingClientRect();
+        // getBoundingClientRectはCSS px。SCALE倍してビットマップ座標に変換する。
+        const toLocal = (el) => {
+          const r = el.getBoundingClientRect();
+          return {
+            x: (r.left - canvasRect.left) * SCALE,
+            y: (r.top - canvasRect.top) * SCALE,
+            w: r.width * SCALE,
+            h: r.height * SCALE,
+          };
+        };
+
+        cards = [...document.querySelectorAll("[data-card]")].map(toLocal);
+
+        // 配置基準のプレート（カードごと1枚ずつ）。アンカー配置に使う
+        plates = [...document.querySelectorAll('[data-plate-role="text"]')].map(toLocal);
+        imagePlates = [...document.querySelectorAll('[data-plate-role="image"]')].map(toLocal);
+
+        frostRegions = [];
+
+        // 焼き込む領域：テキスト＋イラスト（形状はdata属性のpath/viewBox）
+        [...document.querySelectorAll("[data-glass-plate]")].forEach((el) => {
+          const [vw, vh] = el.dataset.plateVb.split(/\s+/).map(Number);
+          const rect = toLocal(el);
+          const cardEl = el.closest("[data-card]");
+          const path = new Path2D(el.dataset.platePath);
+          frostRegions.push({
+            card: cardEl ? toLocal(cardEl) : null,
+            white: FROST_WHITE,
+            path,
+            aabb: rect,
+            center: { cx: rect.x + rect.w / 2, cy: rect.y + rect.h / 2 },
+            // クリップ用の座標変換（inset でプレート中心に向けて縮小）
+            applyTransform: (ctx, inset) => {
+              ctx.translate(rect.x, rect.y);
+              ctx.scale(rect.w / vw, rect.h / vh);
+              if (inset !== 1) {
+                ctx.translate(vw / 2, vh / 2);
+                ctx.scale(inset, inset);
+                ctx.translate(-vw / 2, -vh / 2);
+              }
+            },
           });
+        });
+
+        // QR：回転した角丸正方形。#qr のAABBから一辺と角丸を逆算
+        qrRects = [];
+        [...document.querySelectorAll("#qr")].forEach((el) => {
+          const rect = toLocal(el);
+          qrRects.push(rect);
+          const cardEl = el.closest("[data-card]");
+          const cx = rect.x + rect.w / 2;
+          const cy = rect.y + rect.h / 2;
+          const side = rect.w / Math.SQRT2;          // 45°回転した正方形の一辺
+          const r = (QR_RADIUS * side) / 150;        // rxは150px基準なのでスケール
+          frostRegions.push({
+            card: cardEl ? toLocal(cardEl) : null,
+            white: QR_FROST_WHITE,
+            path: roundedRectPath(side, r),
+            aabb: rect,
+            center: { cx, cy },
+            applyTransform: (ctx, inset) => {
+              ctx.translate(cx, cy);
+              ctx.rotate(Math.PI / 4);
+              if (inset !== 1) ctx.scale(inset, inset);
+            },
+          });
+        });
+      };
+
+      // --- 固定アンカーによるメタボール配置 ----------------------------------
+      // 各カードに5つの定位置（少しばらけさせる）。各アンカーは
+      // 「主ボール（QR左上と同サイズ）＋周囲に小ボール1つ」で構成する。
+      const placeBalls = () => {
+        balls = [];
+        const jit = () => rand(-sJit, sJit);
+
+        cards.forEach((c, i) => {
+          const tp = plates[i];
+          const ip = imagePlates[i];
+          const q = qrRects[i];
+          if (!tp || !ip || !q) return;
+
+          const anchors = [
+            { x: q.x + q.w * 0.28, y: q.y + q.h * 0.28 },     // QR 左上
+            { x: q.x + q.w * 0.70, y: q.y + q.h * 0.30 },     // QR 右やや上
+            { x: q.x + q.w * 0.40, y: q.y + q.h * 0.60 },     // QR 右下
+            { x: tp.x + tp.w * 0.45, y: tp.y + tp.h * 0.60 }, // 名前 中央やや左下
+            { x: ip.x + ip.w * 0.30, y: ip.y + ip.h * 0.75 }, // イラスト やや下
+            { x: ip.x + ip.w * 0.75, y: ip.y + ip.h * 0.25 }, // イラスト 右上
+          ];
+
+          anchors.forEach((an) => {
+            const mainR = rand(sRMin, sRMax);
+            const mx = an.x + jit();
+            const my = an.y + jit();
+            const h = rand(0.4, 0.75);
+            let sl = slFromHue(h);
+            balls.push({ x: mx, y: my, r: mainR, h, s: sl.s, l: sl.l });
+            // 周囲に小さいメタボールを1つ（主ボールと同系色・重なる近さ・少しばらけ）
+            const ang = rand(0, Math.PI * 2);
+            const d = mainR * rand(0.25, 0.3);
+            const sh = Math.min(0.75, Math.max(0.4, h + rand(-0.03, 0.03)));
+            sl = slFromHue(sh);
+            balls.push({
+              x: mx + Math.cos(ang) * d,
+              y: my + Math.sin(ang) * d,
+              r: mainR * rand(0.2, 0.3),
+              h: sh,
+              s: sl.s,
+              l: sl.l,
+            });
+          });
+        });
+
+        balls = balls.slice(0, MAX_BALLS);
+      };
+
+      // 色相hに応じてs/lを決める。緑(h≒0.4)は濃いめ、青紫(h≒0.75)は
+      // 濃くなりすぎないよう明るく・彩度控えめにする。
+      const slFromHue = (h) => {
+        const ht = Math.min(1, Math.max(0, (h - 0.4) / 0.35)); // 0:緑 1:紫
+        return {
+          s: 0.94 - 0.18 * ht + rand(-0.02, 0.02), // 緑は濃く、青紫は控えめ
+          l: 0.86 + 0.1 * ht + rand(-0.02, 0.02),  // 緑はやや暗く、青紫は明るく
+        };
+      };
+
+      // 占有率を計測（カードごと）。step刻みでサンプリング
+      const measure = () => {
+        const step = 7;
+        return cards.map((c, idx) => {
+          const pl = plates[idx];
+          let total = 0;
+          let meta = 0;
+          let glassMeta = 0;
+          let nonGlassMeta = 0;
+          for (let y = c.y; y < c.y + c.h; y += step) {
+            for (let x = c.x; x < c.x + c.w; x += step) {
+              total++;
+              const m = isMeta(x, y);
+              if (m) meta++;
+              const inPlate =
+                pl && x >= pl.x && x <= pl.x + pl.w && y >= pl.y && y <= pl.y + pl.h;
+              if (inPlate) { if (m) glassMeta++; }
+              else if (m) nonGlassMeta++;
+            }
+          }
+          return {
+            occ: meta / total,
+            glassOK: glassMeta > 0,
+            nonGlassOK: nonGlassMeta > 0,
+          };
+        });
+      };
+
+      // 1領域分を凸レンズ風に屈折させて焼き込む
+      const frostOne = (reg) => {
+        const ctx = p.drawingContext;
+        const a = reg.aabb;
+        const ex = Math.max(0, Math.floor(a.x - sDispMargin));
+        const ey = Math.max(0, Math.floor(a.y - sDispMargin));
+        const ew = Math.min(W, Math.ceil(a.x + a.w + sDispMargin)) - ex;
+        const eh = Math.min(H, Math.ceil(a.y + a.h + sDispMargin)) - ey;
+        if (ew <= 2 || eh <= 2) return;
+
+        // 1) プレート形状をぼかしたマスク。縁にだけ勾配が立つ＝レンズの法線源
+        const mc = document.createElement("canvas");
+        mc.width = ew;
+        mc.height = eh;
+        const mx = mc.getContext("2d");
+        mx.fillStyle = "#000";
+        mx.fillRect(0, 0, ew, eh);
+        mx.filter = `blur(${sLensEdge}px)`;
+        mx.fillStyle = "#fff";
+        mx.translate(-ex, -ey);
+        reg.applyTransform(mx, 1);
+        mx.fill(reg.path);
+        const mask = mx.getImageData(0, 0, ew, eh).data;
+
+        // 2) 縁の帯だけ、背景を中心方向に拡大サンプリングして凸レンズ屈折を作る
+        const out = ctx.createImageData(ew, eh);
+        const od = out.data;
+        const bd = bgData.data;
+        const cxp = reg.center.cx;
+        const cyp = reg.center.cy;
+        for (let y = 0; y < eh; y++) {
+          for (let x = 0; x < ew; x++) {
+            const i = y * ew + x;
+            const t = mask[i * 4] / 255; // 0:外 1:内、縁で0→1に遷移
+            const w = t * (1 - t) * 4;   // 縁の帯で最大(=1)、中央/外で0
+            const px = ex + x;
+            const py = ey + y;
+            let sx = px;
+            let sy = py;
+            if (w > 0.01) {
+              const m = LENS_MAG * w; // 縁ほど中心方向へ引き込む＝拡大
+              sx = px - (px - cxp) * m;
+              sy = py - (py - cyp) * m;
+              sx = sx < 0 ? 0 : sx > W - 1 ? W - 1 : sx;
+              sy = sy < 0 ? 0 : sy > H - 1 ? H - 1 : sy;
+            }
+            const si = ((sy | 0) * W + (sx | 0)) * 4;
+            const di = i * 4;
+            od[di] = bd[si];
+            od[di + 1] = bd[si + 1];
+            od[di + 2] = bd[si + 2];
+            od[di + 3] = 255;
+
+            // 縁からLENS_EDGE内側のライン上で、11時方向の光に向く面だけ発光させる
+            if (x > 0 && x < ew - 1 && y > 0 && y < eh - 1) {
+              const gx = mask[(i + 1) * 4] - mask[(i - 1) * 4];
+              const gy = mask[(i + ew) * 4] - mask[(i - ew) * 4];
+              const gmag = Math.hypot(gx, gy);
+              if (gmag > 0.5) {
+                // 外向き法線(=-勾配)と11時方向(-0.5,-0.866)の内積 → 受光面で>0
+                const dir = (gx * 0.5 + gy * 0.866) / gmag;
+                if (dir > 0) {
+                  // 縁からLENS_EDGE内側≒マスク値HILIGHT_T のライン上で最大
+                  const d = (t - HILIGHT_T) / HILIGHT_BAND;
+                  const lineW = Math.exp(-d * d);
+                  const spec = dir * lineW * HILIGHT_A;
+                  od[di] += (255 - od[di]) * spec;
+                  od[di + 1] += (255 - od[di + 1]) * spec;
+                  od[di + 2] += (255 - od[di + 2]) * spec;
+                }
+              }
+            }
+          }
+        }
+
+        // 2b) ドロップシャドウ（板の存在感をかすかに）。本体の前に薄く落とす
+        ctx.save();
+        clipToCard(ctx, reg.card);
+        ctx.translate(sDropDx, sDropDy);
+        reg.applyTransform(ctx, 1);
+        ctx.filter = `blur(${sDropBlur}px)`;
+        ctx.fillStyle = `rgba(20,30,50,${DROP_A})`;
+        ctx.fill(reg.path);
+        ctx.filter = "none";
+        ctx.restore();
+
+        // 3) temp canvas に出力 → プレート形状にクリップして（軽くぼかして）焼き込む
+        const tc = document.createElement("canvas");
+        tc.width = ew;
+        tc.height = eh;
+        tc.getContext("2d").putImageData(out, 0, 0);
+
+        ctx.save();
+        clipToCard(ctx, reg.card);
+        reg.applyTransform(ctx, 1);
+        ctx.clip(reg.path);
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        if (sFrostBlur > 0) ctx.filter = `blur(${sFrostBlur}px)`;
+        ctx.drawImage(tc, ex, ey);
+        ctx.filter = "none";
+        if (reg.white > 0) {
+          ctx.fillStyle = `rgba(255,255,255,${reg.white})`;
+          ctx.fillRect(0, 0, W, H);
+        }
+        ctx.restore();
+      };
+
+      // --- 全体描画（一度きり）------------------------------------------------
+      const renderAll = () => {
+        // メタボールをシェーダーで描画
+        const flatBalls = [];
+        const flatColors = [];
+        balls.forEach((b) => {
+          flatBalls.push(b.x, b.y, b.r);
+          flatColors.push(b.h, b.s, b.l);
+        });
+        webglGfx.clear();
+        webglGfx.shader(shaderProgram);
+        shaderProgram.setUniform("u_resolution", [W, H]);
+        shaderProgram.setUniform("u_threshold", THRESHOLD);
+        shaderProgram.setUniform("u_blurWidth", BLUR_WIDTH);
+        shaderProgram.setUniform("u_count", balls.length);
+        shaderProgram.setUniform("u_balls", flatBalls);
+        shaderProgram.setUniform("u_colors", flatColors);
+        webglGfx.noStroke();
+        webglGfx.plane(W, H);
+
+        // シャープな背景を合成（白地＋メタボール）
+        bg.clear();
+        bg.background(255);
+        bg.image(webglGfx, 0, 0, W, H);
+
+        // debug=2: 背景にグリッドを重ねる（直線が歪むので屈折が分かりやすい）
+        if (DEBUG >= 2) {
+          bg.push();
+          bg.stroke(40, 60, 90, 110);
+          bg.strokeWeight(SCALE);
+          const step = 24 * SCALE;
+          for (let x = 0; x <= W; x += step) bg.line(x, 0, x, H);
+          for (let y = 0; y <= H; y += step) bg.line(0, y, W, y);
+          bg.pop();
+        }
+
+        // メイン＝シャープ背景
+        p.clear();
+        p.background(255);
+        p.image(bg, 0, 0, W, H);
+
+        // 屈折のサンプリング元としてbgのピクセルを一度だけ取得
+        bgData = bg.drawingContext.getImageData(0, 0, W, H);
+
+        // 各プレート形状に、凸レンズ屈折＋（軽い）ぼかし＋リムを焼き込む
+        frostRegions.forEach(frostOne);
+
+        if (DEBUG === 1) drawDebug();
+      };
+
+      const drawDebug = () => {
+        const stats = measure();
+        p.push();
+        p.textSize(11);
+        p.textAlign(p.LEFT, p.TOP);
+        cards.forEach((c, i) => {
+          const s = stats[i];
+          p.noFill();
+          p.stroke(255, 0, 0, 120);
+          p.rect(c.x, c.y, c.w, c.h);
+          const pl = plates[i];
+          if (pl) {
+            p.stroke(0, 120, 255, 160);
+            p.rect(pl.x, pl.y, pl.w, pl.h);
+          }
+          p.noStroke();
+          p.fill(0);
+          const occPct = Math.round(s.occ * 100);
+          const flag = `${s.glassOK ? "G" : "g"}${s.nonGlassOK ? "N" : "n"}`;
+          p.text(`${occPct}% ${flag}`, c.x + 3, c.y + 3);
+        });
+        p.pop();
+      };
+
+      // --- プレート/QRが描画されるのを待ってから構築 ------------------------
+      const waitForPlates = (tries = 0) => {
+        const cardN = document.querySelectorAll("[data-card]").length;
+        const textN = document.querySelectorAll('[data-plate-role="text"]').length;
+        const qrN = document.querySelectorAll("#qr svg").length; // QR本体が描画済みか
+        if (cardN > 0 && textN === cardN && qrN === cardN) {
+          build();
+        } else if (tries < 180) {
+          requestAnimationFrame(() => waitForPlates(tries + 1));
+        } else if (textN > 0) {
+          build();
         }
       };
 
-      p.draw = () => {
-        p.shader(shaderProgram);
-        shaderProgram.setUniform("u_resolution", [p.width, p.height]);
-        shaderProgram.setUniform("u_aspect", p.width / p.height);
-        shaderProgram.setUniform("u_threshold", 0.6);
-        shaderProgram.setUniform("u_blurWidth", 0.4);
-        shaderProgram.setUniform("u_time", p.millis() / 1000);
+      const build = () => {
+        acquireRects();
+        placeBalls();
+        renderAll();
+      };
 
-        // 斥力計算
-        const repulsionStrength = 0.05;
-        const repulsionRange = 100;
+      p.setup = () => {
+        p.pixelDensity(1);
+        const container = this.$refs.canvas;
+        const cssW = container.clientWidth;
+        const cssH = container.clientHeight;
+        W = Math.round(cssW * SCALE);
+        H = Math.round(cssH * SCALE);
+        p.createCanvas(W, H);
+        // 表示は元のサイズ(mm)のまま。ビットマップだけ高解像度にする。
+        p.canvas.style.width = `${cssW}px`;
+        p.canvas.style.height = `${cssH}px`;
+        p.noLoop(); // 背景は固定。描画は手動で一度だけ。
 
-        balls.forEach((ballA, i) => {
-          balls.forEach((ballB, j) => {
-            if (i === j) return;
-            const dx = ballA.x - ballB.x;
-            const dy = ballA.y - ballB.y;
-            const distSq = dx * dx + dy * dy;
+        webglGfx = p.createGraphics(W, H, p.WEBGL);
+        webglGfx.pixelDensity(1);
+        shaderProgram = webglGfx.createShader(vertShader, fragShader);
 
-            if (distSq < repulsionRange * repulsionRange && distSq > 0.0001) {
-              const dist = Math.sqrt(distSq);
-              const force = repulsionStrength / distSq;
-              const fx = (dx / dist) * force;
-              const fy = (dy / dist) * force;
+        bg = p.createGraphics(W, H);
+        bg.pixelDensity(1);
 
-              ballA.vx += fx;
-              ballA.vy += fy;
-            }
-          });
-        });
-
-        // ボールデータ更新
-        let positions = [];
-        let colors = [];
-        balls.forEach((ball) => {
-          ball.x += ball.vx;
-          ball.y += ball.vy;
-
-          if (ball.x < 10 || ball.x > p.width - 10) ball.vx *= -1;
-          if (ball.y < 10 || ball.y > p.height - 10) ball.vy *= -1;
-
-          positions.push(ball.x, ball.y, ball.r);
-          colors.push(ball.h, ball.s, ball.l);
-        });
-
-        shaderProgram.setUniform("u_balls", positions);
-        shaderProgram.setUniform("u_colors", colors);
-
-        // rectをキャンバス全体に合わせて描画
-        p.rect();
+        waitForPlates();
       };
     };
-    
+
     new p5(sketch, this.$refs.canvas);
   },
 };
