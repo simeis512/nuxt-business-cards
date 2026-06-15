@@ -23,7 +23,7 @@ export default {
   body {
     margin: 0;
     padding: 0;
-    background: green;
+    background: #fff; /* 用紙の地色。canvasがA4全面を覆うが、端のはみ被り防止に白 */
   }
   .print-page {
     -webkit-print-color-adjust: exact;

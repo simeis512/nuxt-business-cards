@@ -6,18 +6,19 @@
          先にこれを1フレーム描画させてから重い処理に入る（runBuild 参照）。
          スピナーは transform アニメ＝コンポジタ側で回るので描画中も止まらない。 -->
     <div
-      v-if="rendering"
+      v-if="rendering || exporting"
+      data-no-export
       class="fixed inset-0 z-50 flex items-center justify-center bg-white/50 pointer-events-none print:hidden"
     >
       <div class="flex items-center gap-3 rounded-xl bg-black/75 px-5 py-3 text-white text-sm shadow-lg">
         <span class="inline-block w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin"></span>
-        描画中…
+        {{ exporting ? "画像を保存中…" : "描画中…" }}
       </div>
     </div>
 
-    <!-- 操作ヒント（印刷には出さない） -->
-    <div class="fixed bottom-3 right-3 z-40 rounded-md bg-black/55 px-2.5 py-1 text-[11px] text-white/90 pointer-events-none print:hidden">
-      R キーで再描画
+    <!-- 操作ヒント（印刷・PNG書き出しには出さない） -->
+    <div data-no-export class="fixed bottom-3 right-3 z-40 rounded-md bg-black/55 px-2.5 py-1 text-[11px] text-white/90 pointer-events-none print:hidden">
+      R: 再描画 ／ S: 画像保存(PNG)
     </div>
   </div>
 </template>
@@ -60,8 +61,14 @@ const MAX_BALLS = 128;     // シェーダー側の上限と一致させる
 const ANCHOR_JIT = 8;      // 固定アンカーのばらけ幅(px)
 
 // 印刷用の内部解像度倍率。表示サイズ(mm)は据え置き、canvasのピクセル数だけ増やす。
-// 大きいほど高精細だが、初期化が重くなる（2〜3が目安）。
-const SCALE = 3;
+// 大きいほど高精細だが、初期化が SCALE² で重くなる。既定3(≒288dpi)。
+// 書き出し時だけ URL の ?scale=4〜5(≒384〜480dpi) で高精細化できる（1〜6でクランプ）。
+const SCALE = (() => {
+  if (typeof window === "undefined") return 3;
+  const m = window.location.search.match(/[?&]scale=([\d.]+)/);
+  const v = m ? parseFloat(m[1]) : NaN;
+  return Number.isFinite(v) ? Math.min(6, Math.max(1, v)) : 3;
+})();
 
 // 占有率の目標レンジ（カード面積に対するメタボールの割合）
 const OCC_MIN = 0.22;
@@ -74,7 +81,48 @@ const smoothstep = (a, b, x) => {
 
 export default {
   data() {
-    return { rendering: false };
+    return { rendering: false, exporting: false };
+  },
+  methods: {
+    // Sキー：ブラウザの合成器でA4全面(背景canvas＋カードDOM)をPNG化して保存。
+    // ChromeのPDF保存→GIMP(poppler)で起きる暗転問題を回避するための書き出し経路。
+    async exportPng() {
+      if (this.exporting || this.rendering) return;
+      this.exporting = true;
+      try {
+        const { default: html2canvas } = await import("html2canvas");
+        if (document.fonts && document.fonts.ready) await document.fonts.ready;
+        await this.$nextTick();
+        // 「保存中…」を1フレーム描画させてから重い合成に入る
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const target = document.querySelector(".print-page") || this.$refs.canvas;
+        // .print-page は子が全て絶対配置で高さ0になるため、A4実寸(背景canvasのCSSサイズ)を明示。
+        const cv = this.$refs.canvas.querySelector("canvas");
+        const w = cv ? cv.clientWidth : Math.round(210 * (96 / 25.4));
+        const h = cv ? cv.clientHeight : Math.round(297 * (96 / 25.4));
+        const canvas = await html2canvas(target, {
+          backgroundColor: "#ffffff",
+          scale: SCALE, // ?scale=N と連動した高DPI（既定3）
+          useCORS: true,
+          logging: false,
+          width: w,
+          height: h,
+          windowWidth: Math.max(document.documentElement.clientWidth, w),
+          windowHeight: Math.max(document.documentElement.clientHeight, h),
+          ignoreElements: (el) => el.hasAttribute && el.hasAttribute("data-no-export"),
+        });
+        const a = document.createElement("a");
+        a.href = canvas.toDataURL("image/png");
+        a.download = `business-cards@${SCALE}x.png`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      } catch (err) {
+        console.error("PNG export failed:", err);
+      } finally {
+        this.exporting = false;
+      }
+    },
   },
   beforeUnmount() {
     if (this._onKey) window.removeEventListener("keydown", this._onKey);
@@ -584,13 +632,16 @@ export default {
 
     this._p5 = new p5(sketch, this.$refs.canvas);
 
-    // R キーで再描画（入力欄にフォーカス中などは無視）
+    // R: 再描画 ／ S: PNG保存（入力欄にフォーカス中や修飾キー併用時は無視）
     this._onKey = (e) => {
-      if (e.key !== "r" && e.key !== "R") return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       const t = e.target;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-      this._rebuild && this._rebuild();
+      if (e.key === "r" || e.key === "R") {
+        this._rebuild && this._rebuild();
+      } else if (e.key === "s" || e.key === "S") {
+        this.exportPng();
+      }
     };
     window.addEventListener("keydown", this._onKey);
   },
