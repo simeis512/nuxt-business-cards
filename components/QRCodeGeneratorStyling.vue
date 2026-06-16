@@ -1,10 +1,8 @@
 <template>
   <div class="relative w-fit">
-    <!-- opacity-60 はグループ不透明度＝PDFで分離透明グループになり、GIMP(poppler)が
-         黒背景に合成して暗転する。各色のアルファに焼き込んで分離グループを避ける。 -->
-    <div class="absolute inset-0 flex justify-center items-center">
+    <div class="absolute inset-0 flex justify-center items-center opacity-60">
       <div class="absolute inset-0 flex justify-center items-center">
-        <div ref="qrCode" id="qr" class="-rotate-90" />
+        <div ref="qrCode" id="qr" class="-rotate-90 " />
       </div>
       <div class="absolute inset-0 flex justify-center items-center">
         <div class="absolute flex justify-center items-center w-[9mm] h-[19mm] rounded-[1mm] bg-transparent -rotate-45">
@@ -13,14 +11,14 @@
             <svg viewBox="0 0 24 24" width="24" height="24" xmlns="http://www.w3.org/2000/svg">
               <path
                 d="m1.25 2.05 20.7 20.7-1.25 1.25-2-2h-14.7a2 2 0 0 1 -2-2v-14.7l-2-2zm2.56-.05h.19 16c1.11 0 2 .89 2 2v16 .19l-2-1.99v-14.2h-14.2zm2.19 7.3-2-2v12.7h12.7l-2-2h-8.7zm12 6.9-2-2v-6.2h-3v2.28c.6.34 1 .98 1 1.72v.19l-3-2.99v-1.2a2 2 0 0 1 2-2h5zm-10-.2h4.7l-4.7-4.7zm2-8h-.2l-2-2h2.2z"
-                fill="#00113366"
+                fill="#013A"
               />
             </svg>
           </div>
         </div>
       </div>
     </div>
-    <div class="absolute inset-0 flex justify-center items-center zen-maru-gothic-medium text-lg text-center text-[#00113399] translate-y-[20.7mm] scale-50">
+    <div class="absolute inset-0 flex justify-center items-center zen-maru-gothic-medium text-lg text-center text-[#013] opacity-60 translate-y-[20.7mm] scale-50">
       {{ data }}
     </div>
   </div>
@@ -39,62 +37,65 @@ export default {
       height: 150,
       type: 'svg',
       data: this.data,
-      // 旧: 色は#013/#FFF4＋ラッパのopacity-60。PDF対策でopacityを廃し、
-      // 60%を各色のアルファに焼き込む（#013@60%=#00113399, #FFF4@60%≒#FFFFFF29）。
-      dotsOptions: { color: '#00113399', type: 'dots' },
-      cornersSquareOptions: { color: '#00113399', type: 'extra-rounded' },
-      backgroundOptions: { color: '#FFFFFF29' },
+      dotsOptions: { color: '#013', type: 'dots' },
+      cornersSquareOptions: { color: '#013', type: 'extra-rounded' },
+      backgroundOptions: { color: '#FFF4' },
       qrOptions: { errorCorrectionLevel: 'H' },
     });
     qrCode.append(this.$refs.qrCode);
-    this.applyNfcCut();
+    this.applyNfcMask();
   },
   methods: {
     // 中央のNFC貼り付け枠（9mm×19mm 角丸1mm）の形にQRをくり抜く。
-    // mask/clipPath/group-opacity は ChromeのPDF保存→GIMP(poppler) で
-    // 「分離透明グループが黒backdropに合成され暗転」する相互運用問題を起こす。
-    // そこで透明グループを一切作らず、枠に重なるドット要素を物理削除して穴をあける。
-    applyNfcCut(tries = 0) {
+    // QRの<svg>(viewBox 0 0 150 150, 1unit=1px)内に<mask>を注入し、全描画要素に適用する。
+    applyNfcMask(tries = 0) {
       const svg = this.$refs.qrCode && this.$refs.qrCode.querySelector('svg');
       if (!svg) {
-        if (tries < 60) requestAnimationFrame(() => this.applyNfcCut(tries + 1));
+        if (tries < 60) requestAnimationFrame(() => this.applyNfcMask(tries + 1));
         return;
       }
-      if (svg.dataset.nfcCut) return; // 二重適用防止
-      const circles = svg.querySelectorAll('circle');
-      if (!circles.length) {
-        if (tries < 60) requestAnimationFrame(() => this.applyNfcCut(tries + 1));
-        return;
-      }
-      svg.dataset.nfcCut = '1';
+      if (svg.querySelector('#nfc-cut')) return; // 二重適用防止
 
+      const NS = 'http://www.w3.org/2000/svg';
       const U = 96 / 25.4; // 1mm をpx(=viewBox unit)へ。96dpi基準
-      const hw = (9 * U) / 2;  // NFC枠 横9mm の半分
-      const hh = (19 * U) / 2; // NFC枠 縦19mm の半分
-      const R = 1 * U;         // 角丸1mm
-      const cx = 75;           // viewBox中央
+      const W = 9 * U;     // NFC枠 横9mm
+      const H = 19 * U;    // NFC枠 縦19mm
+      const R = 1 * U;     // 角丸1mm
+      const cx = 75;       // viewBox中央
       const cy = 75;
 
-      // 枠はQRローカルで+45°回転。点を-45°戻して軸並行の角丸矩形に入るか判定する。
-      const c = Math.cos(-Math.PI / 4);
-      const s = Math.sin(-Math.PI / 4);
-      const inHole = (px, py) => {
-        const dx = px - cx;
-        const dy = py - cy;
-        const ax = Math.abs(dx * c - dy * s);
-        const ay = Math.abs(dx * s + dy * c);
-        if (ax > hw || ay > hh) return false;
-        if (ax <= hw - R || ay <= hh - R) return true; // 直線部
-        const ex = ax - (hw - R);                       // 角丸部
-        const ey = ay - (hh - R);
-        return ex * ex + ey * ey <= R * R;
+      const el = (tag, attrs) => {
+        const n = document.createElementNS(NS, tag);
+        for (const k in attrs) n.setAttribute(k, attrs[k]);
+        return n;
       };
 
-      circles.forEach((d) => {
-        const px = parseFloat(d.getAttribute('cx'));
-        const py = parseFloat(d.getAttribute('cy'));
-        if (Number.isFinite(px) && Number.isFinite(py) && inHole(px, py)) d.remove();
+      const mask = el('mask', {
+        id: 'nfc-cut',
+        maskUnits: 'userSpaceOnUse',
+        x: 0, y: 0, width: 150, height: 150,
       });
+      // 白=残す / 黒=くり抜く
+      mask.appendChild(el('rect', { x: 0, y: 0, width: 150, height: 150, fill: 'white' }));
+      mask.appendChild(el('rect', {
+        x: cx - W / 2, y: cy - H / 2, width: W, height: H, rx: R, ry: R, fill: 'black',
+        // QRローカルで+45°回すと、ページ上では直立のNFC枠に一致する
+        transform: `rotate(45 ${cx} ${cy})`,
+      }));
+
+      let defs = svg.querySelector('defs');
+      if (!defs) {
+        defs = el('defs', {});
+        svg.insertBefore(defs, svg.firstChild);
+      }
+      defs.appendChild(mask);
+
+      // defs以外の描画要素をマスク付きグループに包む
+      const g = el('g', { mask: 'url(#nfc-cut)' });
+      [...svg.childNodes].forEach((n) => {
+        if (n !== defs && n.nodeType === 1) g.appendChild(n);
+      });
+      svg.appendChild(g);
     },
   },
 };
@@ -103,7 +104,7 @@ export default {
 <style lang="scss">
 #qr {
   circle {
-    r: 1.3;
+    r: 1.5;
   }
   rect:first-child {
     rx: 18;

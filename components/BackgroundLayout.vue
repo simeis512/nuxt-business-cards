@@ -20,6 +20,51 @@
     <div data-no-export class="fixed bottom-3 right-3 z-40 rounded-md bg-black/55 px-2.5 py-1 text-[11px] text-white/90 pointer-events-none print:hidden">
       R: 再描画 ／ S: 画像保存(PNG)
     </div>
+
+    <!-- 印刷補正パネル（画面のみ。印刷・PNG書き出しには出さない） -->
+    <div
+      data-no-export
+      class="fixed top-3 left-3 z-40 w-52 rounded-lg bg-black/70 p-3 text-[11px] text-white pointer-events-auto print:hidden"
+      :class="{ 'space-y-2': panelOpen }"
+    >
+      <!-- ヘッダー：クリックで開閉 -->
+      <div class="flex cursor-pointer select-none items-center justify-between" @click="togglePanel">
+        <span class="font-bold">印刷補正（背景のみ）</span>
+        <span class="ml-2 opacity-80">{{ panelOpen ? "▲" : "▼" }}</span>
+      </div>
+      <template v-if="panelOpen">
+        <label class="block">
+          <div class="flex justify-between"><span>彩度</span><span>{{ satur.toFixed(2) }}</span></div>
+          <input v-model.number="satur" type="range" min="0.5" max="2" step="0.01" class="w-full" />
+        </label>
+        <label class="block">
+          <div class="flex justify-between"><span>明度</span><span>{{ bright.toFixed(3) }}</span></div>
+          <!-- 明度は1.0付近で白飛びしやすいので範囲を狭め分解能を上げる -->
+          <input v-model.number="bright" type="range" min="0.85" max="1.15" step="0.002" class="w-full" />
+        </label>
+        <label class="block">
+          <div class="flex justify-between"><span>コントラスト</span><span>{{ contrast.toFixed(2) }}</span></div>
+          <input v-model.number="contrast" type="range" min="0.5" max="1.5" step="0.01" class="w-full" />
+        </label>
+        <div class="flex gap-2 pt-1">
+          <button class="rounded bg-white/15 px-2 py-1 hover:bg-white/25" @click="resetAdjust">
+            リセット
+          </button>
+          <!-- 押している間だけ無補正（デフォルト）を表示して比較 -->
+          <button
+            class="flex-1 select-none rounded py-1"
+            :class="previewDefault ? 'bg-amber-400/70 text-black' : 'bg-white/15 hover:bg-white/25'"
+            @mousedown="setPreviewDefault(true)"
+            @mouseup="setPreviewDefault(false)"
+            @mouseleave="setPreviewDefault(false)"
+            @touchstart.prevent="setPreviewDefault(true)"
+            @touchend="setPreviewDefault(false)"
+          >
+            {{ previewDefault ? "元の色を表示中…" : "長押しで元の色" }}
+          </button>
+        </div>
+      </template>
+    </div>
   </div>
 </template>
 
@@ -33,7 +78,7 @@ const THRESHOLD = 0.6;      // しきい値
 const BLUR_WIDTH = 0.08;    // 輪郭のソフトさ（小さいほどエッジが立つ）
 const FROST_BLUR_PX = 0.5;  // すりガラスのぼかし量(px)。0なら完全に透明な板
 const FROST_WHITE = 0.35;   // すりガラスの白み（テキスト/イラスト面）
-const QR_FROST_WHITE = 0.0; // QR面は自前の白背景があるので、フロスト側の白は無し
+const QR_FROST_WHITE = 0.0; // QR面は自前の白背景(#FFF4)があるので、フロスト側の白は無し
 const QR_RADIUS = 18;       // QR背景の角丸（150px基準。QRCodeGeneratorStyling の rx と一致）
 
 // 凸レンズ風の屈折：プレート形状をぼかしたマスクで「縁の帯」を求め、
@@ -81,9 +126,62 @@ const smoothstep = (a, b, x) => {
 
 export default {
   data() {
-    return { rendering: false, exporting: false };
+    // 印刷補正：彩度/明度/コントラスト（1.0=無補正）。背景canvasのみにCSS filterで適用。
+    // previewDefault=長押し中だけ無補正にして元の色と比較する。
+    return { rendering: false, exporting: false, satur: 1, bright: 1, contrast: 1, previewDefault: false, panelOpen: true };
+  },
+  computed: {
+    adjustFilter() {
+      return `saturate(${this.satur}) brightness(${this.bright}) contrast(${this.contrast})`;
+    },
+    adjustActive() {
+      return this.satur !== 1 || this.bright !== 1 || this.contrast !== 1;
+    },
+  },
+  watch: {
+    adjustFilter() {
+      this.applyAdjust();
+    },
+    previewDefault() {
+      this.applyAdjust();
+    },
   },
   methods: {
+    // 印刷補正を「背景canvasのみ」に適用（文字/QR/イラストは非補正）。値はlocalStorageに保存。
+    applyAdjust(tries = 0) {
+      if (tries === 0) {
+        try {
+          localStorage.setItem(
+            "cardAdjust",
+            JSON.stringify({ s: this.satur, b: this.bright, c: this.contrast })
+          );
+        } catch (e) { /* localStorage不可でも無視 */ }
+      }
+      const cv = this.$refs.canvas && this.$refs.canvas.querySelector("canvas");
+      if (!cv) {
+        // 背景canvasがまだ生成されていなければ少し待って再適用
+        if (tries < 60) requestAnimationFrame(() => this.applyAdjust(tries + 1));
+        return;
+      }
+      // 長押し比較中(previewDefault)は無補正で表示
+      cv.style.filter = this.adjustActive && !this.previewDefault ? this.adjustFilter : "";
+    },
+    resetAdjust() {
+      this.satur = 1;
+      this.bright = 1;
+      this.contrast = 1;
+    },
+    // 比較ボタン：押している間だけデフォルト（無補正）を表示
+    setPreviewDefault(v) {
+      this.previewDefault = v;
+    },
+    // 補正パネルの開閉。状態はlocalStorageに保存
+    togglePanel() {
+      this.panelOpen = !this.panelOpen;
+      try {
+        localStorage.setItem("cardPanelOpen", this.panelOpen ? "1" : "0");
+      } catch (e) { /* 無視 */ }
+    },
     // Sキー：ブラウザの合成器でA4全面(背景canvas＋カードDOM)をPNG化して保存。
     // ChromeのPDF保存→GIMP(poppler)で起きる暗転問題を回避するための書き出し経路。
     async exportPng() {
@@ -96,23 +194,56 @@ export default {
         // 「保存中…」を1フレーム描画させてから重い合成に入る
         await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
         const target = document.querySelector(".print-page") || this.$refs.canvas;
+        const bgCanvas = this.$refs.canvas.querySelector("canvas");
         // .print-page は子が全て絶対配置で高さ0になるため、A4実寸(背景canvasのCSSサイズ)を明示。
-        const cv = this.$refs.canvas.querySelector("canvas");
-        const w = cv ? cv.clientWidth : Math.round(210 * (96 / 25.4));
-        const h = cv ? cv.clientHeight : Math.round(297 * (96 / 25.4));
-        const canvas = await html2canvas(target, {
-          backgroundColor: "#ffffff",
-          scale: SCALE, // ?scale=N と連動した高DPI（既定3）
-          useCORS: true,
-          logging: false,
-          width: w,
-          height: h,
-          windowWidth: Math.max(document.documentElement.clientWidth, w),
-          windowHeight: Math.max(document.documentElement.clientHeight, h),
-          ignoreElements: (el) => el.hasAttribute && el.hasAttribute("data-no-export"),
-        });
+        const w = bgCanvas ? bgCanvas.clientWidth : Math.round(210 * (96 / 25.4));
+        const h = bgCanvas ? bgCanvas.clientHeight : Math.round(297 * (96 / 25.4));
+        // 補正は「背景canvasのみ」。html2canvasはCSS filter非対応なので、捕捉前に
+        // 背景canvasのピクセルへ補正を焼き込み（カードは非補正のまま）、捕捉後に元へ戻す。
+        const prevCss = bgCanvas ? bgCanvas.style.filter : "";
+        let orig = null;
+        if (bgCanvas && this.adjustActive && !this.previewDefault) {
+          orig = document.createElement("canvas");
+          orig.width = bgCanvas.width;
+          orig.height = bgCanvas.height;
+          orig.getContext("2d").drawImage(bgCanvas, 0, 0);
+          const bctx = bgCanvas.getContext("2d");
+          bctx.save();
+          bctx.setTransform(1, 0, 0, 1, 0, 0);
+          bctx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
+          bctx.filter = this.adjustFilter;
+          bctx.drawImage(orig, 0, 0);
+          bctx.filter = "none";
+          bctx.restore();
+        }
+        if (bgCanvas) bgCanvas.style.filter = ""; // 画面のCSS filterは捕捉に効かないが念のため外す
+        let raw;
+        try {
+          raw = await html2canvas(target, {
+            backgroundColor: "#ffffff",
+            scale: SCALE, // ?scale=N と連動した高DPI（既定3）
+            useCORS: true,
+            logging: false,
+            width: w,
+            height: h,
+            windowWidth: Math.max(document.documentElement.clientWidth, w),
+            windowHeight: Math.max(document.documentElement.clientHeight, h),
+            ignoreElements: (el) => el.hasAttribute && el.hasAttribute("data-no-export"),
+          });
+        } finally {
+          // 背景canvasのピクセルとCSS filterを元へ戻す
+          if (orig && bgCanvas) {
+            const bctx = bgCanvas.getContext("2d");
+            bctx.save();
+            bctx.setTransform(1, 0, 0, 1, 0, 0);
+            bctx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
+            bctx.drawImage(orig, 0, 0);
+            bctx.restore();
+          }
+          if (bgCanvas) bgCanvas.style.filter = prevCss;
+        }
         const a = document.createElement("a");
-        a.href = canvas.toDataURL("image/png");
+        a.href = raw.toDataURL("image/png");
         a.download = `business-cards@${SCALE}x.png`;
         document.body.appendChild(a);
         a.click();
@@ -353,12 +484,12 @@ export default {
 
       // 色相hに応じてs/lを決める。基本は修正前の色味（緑は濃いめ、紫は彩度
       // 控えめでやわらかい）。ただし紫が白飛びしないよう、明度の振れ幅だけ
-      // 狭める（旧:+0.1*ht=最大l0.96 → +0.06*ht=最大l約0.92）。
+      // 狭める（旧:+0.1*ht=最大l0.96 → +0.04*ht=最大l約0.92）。
       const slFromHue = (h) => {
         const ht = Math.min(1, Math.max(0, (h - 0.4) / 0.35)); // 0:緑 1:紫
         return {
           s: 0.94 - 0.18 * ht + rand(-0.02, 0.02), // 緑は濃く、青紫は控えめ（修正前どおり）
-          l: 0.86 + 0.06 * ht + rand(-0.02, 0.02), // 紫の明るさ上限を抑えて白飛び回避
+          l: 0.86 + 0.04 * ht + rand(-0.02, 0.02), // 紫の明るさ上限を抑えて白飛び回避
         };
       };
 
@@ -644,6 +775,19 @@ export default {
       }
     };
     window.addEventListener("keydown", this._onKey);
+
+    // 保存済みの印刷補正・パネル開閉状態を復元して適用
+    try {
+      const j = JSON.parse(localStorage.getItem("cardAdjust"));
+      if (j) {
+        this.satur = j.s ?? 1;
+        this.bright = j.b ?? 1;
+        this.contrast = j.c ?? 1;
+      }
+      const o = localStorage.getItem("cardPanelOpen");
+      if (o !== null) this.panelOpen = o === "1";
+    } catch (e) { /* 無視 */ }
+    this.$nextTick(() => this.applyAdjust());
   },
 };
 </script>
