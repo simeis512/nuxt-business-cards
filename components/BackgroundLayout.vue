@@ -381,9 +381,10 @@ export default {
           });
         });
 
-        // QR：回転した角丸正方形。#qr のAABBから一辺と角丸を逆算
+        // QR：回転した角丸正方形。背景プレート本体のAABBから一辺と角丸を逆算する。
+        // #qr は QR_SCALE の対象なので、PLATE_SCALE で変わるプレートサイズとは一致しない。
         qrRects = [];
-        [...document.querySelectorAll("#qr")].forEach((el) => {
+        [...document.querySelectorAll("[data-qr-plate]")].forEach((el) => {
           const rect = toLocal(el);
           qrRects.push(rect);
           const cardEl = el.closest("[data-card]");

@@ -1,7 +1,27 @@
 <template>
   <div class="relative w-fit">
     <div class="absolute inset-0 flex justify-center items-center opacity-60">
+      <!-- 背景プレート: QRの拡縮(QR_SCALE)に依存しない固定サイズ。中央はNFC枠の形にくり抜く -->
+      <!-- svgを直接flex子にすると0幅コンテナで潰れるため、固定サイズのブロックdivで包む -->
       <div class="absolute inset-0 flex justify-center items-center">
+        <div
+          data-qr-plate
+          class="w-[150px] h-[150px] shrink-0"
+          :style="{ transform: 'scale(' + plateScale + ')' }"
+        >
+          <svg width="150" height="150" viewBox="0 0 150 150" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <mask :id="plateMaskId" maskUnits="userSpaceOnUse" x="0" y="0" width="150" height="150">
+                <rect x="0" y="0" width="150" height="150" rx="18" fill="white" />
+                <rect :x="nfc.x" :y="nfc.y" :width="nfc.w" :height="nfc.h" :rx="nfc.r" :ry="nfc.r"
+                  fill="black" transform="rotate(-45 75 75)" />
+              </mask>
+            </defs>
+            <rect x="0" y="0" width="150" height="150" rx="18" fill="#FFF4" :mask="`url(#${plateMaskId})`" />
+          </svg>
+        </div>
+      </div>
+      <div class="absolute inset-0 flex justify-center items-center" :style="{ transform: 'scale(' + qrScale + ')' }">
         <div ref="qrCode" id="qr" class="-rotate-90 " />
       </div>
       <div class="absolute inset-0 flex justify-center items-center">
@@ -18,7 +38,7 @@
         </div>
       </div>
     </div>
-    <div class="absolute inset-0 flex justify-center items-center zen-maru-gothic-medium text-lg text-center text-[#013] opacity-60 translate-y-[20.7mm] scale-50">
+    <div class="absolute inset-0 flex justify-center items-center zen-maru-gothic-medium text-lg text-center text-[#013] opacity-60 translate-y-[21.2mm] scale-[0.6]">
       {{ data }}
     </div>
   </div>
@@ -27,9 +47,36 @@
 <script>
 import QRCodeStyling from "qr-code-styling";
 
+// 表示倍率。どちらも基準サイズ(150)からのCSS transform倍率で、互いに独立して任意に指定できる。
+// qr-code-stylingのwidth/heightは内部で量子化され微調整できないため、ここで連続的に拡縮する。
+// 1=基準, <1で小さく, >1で大きく。NFC貼り付けエリアはどちらの倍率でも物理サイズ固定。
+const QR_SCALE = 0.85;    // QRコード(ドット/コーナー)の倍率
+const PLATE_SCALE = 1.0;    // 背景プレート(#FFF4)の倍率
+const U = 96 / 25.4; // 1mm をpx(=viewBox unit)へ。96dpi基準
+const NFC_W = 8.7;   // NFC枠 横(mm)
+const NFC_H = 18.7;  // NFC枠 縦(mm)
+const NFC_R = 1;     // 角丸(mm)
+
 export default {
   props: {
     data: { type: String, required: true },
+  },
+  data() {
+    return {
+      plateMaskId: 'nfc-plate-' + Math.random().toString(36).slice(2, 9),
+    };
+  },
+  // 倍率系はcomputedにする(data()はHMRで再実行されず定数変更が反映されないため)。
+  computed: {
+    qrScale: () => QR_SCALE,
+    plateScale: () => PLATE_SCALE,
+    // 背景プレートのNFCくり抜き矩形(150px基準・中央)。プレートはCSS回転しないので-45°で配置。
+    // プレートをCSSでPLATE_SCALE倍するため、くり抜きは1/PLATE_SCALEし物理サイズを固定する。
+    nfc() {
+      const w = (NFC_W * U) / PLATE_SCALE;
+      const h = (NFC_H * U) / PLATE_SCALE;
+      return { x: 75 - w / 2, y: 75 - h / 2, w, h, r: (NFC_R * U) / PLATE_SCALE };
+    },
   },
   mounted() {
     const qrCode = new QRCodeStyling({
@@ -39,7 +86,7 @@ export default {
       data: this.data,
       dotsOptions: { color: '#013', type: 'dots' },
       cornersSquareOptions: { color: '#013', type: 'extra-rounded' },
-      backgroundOptions: { color: '#FFF4' },
+      backgroundOptions: { color: 'transparent' }, // プレートは別SVGで描くのでQR自体は透明
       qrOptions: { errorCorrectionLevel: 'H' },
     });
     qrCode.append(this.$refs.qrCode);
@@ -57,10 +104,11 @@ export default {
       if (svg.querySelector('#nfc-cut')) return; // 二重適用防止
 
       const NS = 'http://www.w3.org/2000/svg';
-      const U = 96 / 25.4; // 1mm をpx(=viewBox unit)へ。96dpi基準
-      const W = 9 * U;     // NFC枠 横9mm
-      const H = 19 * U;    // NFC枠 縦19mm
-      const R = 1 * U;     // 角丸1mm
+      // QR全体をCSSでQR_SCALE倍するため、くり抜きはローカルで1/QR_SCALEし、
+      // 表示後の物理サイズがプレートのくり抜き(NFC_W×NFC_H mm)と一致するようにする。
+      const W = NFC_W * U / QR_SCALE;   // NFC枠 横(mm)
+      const H = NFC_H * U / QR_SCALE;   // NFC枠 縦(mm)
+      const R = NFC_R * U / QR_SCALE;   // 角丸(mm)
       const cx = 75;       // viewBox中央
       const cy = 75;
 
@@ -90,7 +138,7 @@ export default {
       }
       defs.appendChild(mask);
 
-      // defs以外の描画要素をマスク付きグループに包む
+      // defs以外の描画要素(ドット/コーナー)をマスク付きグループに包む
       const g = el('g', { mask: 'url(#nfc-cut)' });
       [...svg.childNodes].forEach((n) => {
         if (n !== defs && n.nodeType === 1) g.appendChild(n);
